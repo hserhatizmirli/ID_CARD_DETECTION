@@ -1,87 +1,118 @@
 import cv2
+import json
 import base64
 import numpy as np
 import easyocr
-from flask import Flask, render_template, request, jsonify
+import requests
+import re
+from flask import Flask, render_template
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 print("="*50)
-print("KİMLİK TANIMA SİSTEMİ BAŞLATILIYOR...")
+print("KİMLİK TANIMA SİSTEMİ BAŞLATILIYOR (RESMİ KURALLAR)...")
 print("="*50)
 
-print("OCR modeli yükleniyor (Lütfen bekleyin)...")
-reader = easyocr.Reader(['tr', 'en'])
-print("OCR Hazır! Sunucu başlatılıyor...")
+print("EasyOCR modeli yükleniyor...")
+reader = easyocr.Reader(['tr', 'en'], gpu=True)  
+print("Sistem Hazır!")
 
-history = []
+def extract_identity_info(full_text):
+    system_prompt = f"""
+    Sen kimlik kartı verilerini ayıklayan kesin bir veri çıkarma robotusun.
+    Aşağıdaki OCR metnini analiz et ve SADECE JSON formatında yanıt ver.
+
+    KİMLİK KARTI YAPISI VE KURALLAR:
+    1. soyad: Kimliklerde önce "Soyadı / Surname" (veya "Sumame", "Suname") yazar, gerçek soyisim BU ETİKETTEN SONRA gelir. Etiketi sil, sadece SOYADINI (örn: İZMİRLİ) al.
+    2. ad: Kimliklerde "Adı / Given Name(s)" yazar. Gerçek isim BU ETİKETTEN SONRA gelir. İsimler arasında noktalama işareti olmadan sadece boşluk olacak şekilde kalmalı. İSİM BİRDEN FAZLA KELİME OLABİLİR (Örn: "Hüseyin Serhat", "Mehmet Ali"). Etiketleri sil, tüm isimleri al.
+    3. tc_kimlik: Sadece 11 haneli rakam dizisidir.
+    4. dogum_tarihi: Sadece GG.AA.YYYY formatı. Doğum tarihi son geçerlilik tarihinden eski olmalıdır.
+    5. cinsiyet: Sadece "ERKEK" veya "KADIN" yaz. (Metinde E/M = ERKEK, K/F = KADIN).
+    6. son_gecerlilik: GG.AA.YYYY formatındaki ikinci tarihtir.
+    7. seri_no: Tam 9 karakterdir, harfler ve rakamlar içerir sıralaması harf + rakam + rakam + harf + rakam + rakam + rakam + rakam + rakam (Örn: A12B34567).
+
+    OCR Metni:
+    {full_text}
+    """
+
+    url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": "llama3.2:3b",  
+        "prompt": system_prompt,
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0.0}
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=60)
+        response_data = response.json()
+        if 'error' in response_data: return None
+        return json.loads(response_data['response'])
+    except Exception as e:
+        print(f"LLM Hatası: {e}")
+        return None
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/detect', methods=['POST'])
-def detect_id():
-    global history
+@socketio.on('process_frame')
+def handle_frame(data):
     try:
-        data = request.json
-        if not data or 'image' not in data:
-            return jsonify({'error': 'Görüntü verisi eksik'}), 400
-            
-        image_data = data['image'].split(',')[1]
-        image_bytes = base64.b64decode(image_data)
+        image_data = data.get('image')
+        if not image_data:
+            emit('result', {'error': 'Görüntü eksik'})
+            return
+
+        image_bytes = base64.b64decode(image_data.split(',')[1])
         np_array = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
         
         if frame is None:
-            return jsonify({'error': 'Geçersiz görüntü'}), 400
+            emit('result', {'error': 'Geçersiz görüntü'})
+            return
+        
+        max_width = 800
+        if frame.shape[1] > max_width:
+            scale = max_width / frame.shape[1]
+            roi = cv2.resize(frame, (max_width, int(frame.shape[0] * scale)))
+        else:
+            roi = frame
 
-        # === 85.6 mm / 54.0 mm Standart Kart Oranına Göre Kesim ===
-        h, w = frame.shape[:2]
-        card_ratio = 85.6 / 54.0 
-        
-        box_w = int(w * 0.8)
-        box_h = int(box_w / card_ratio)
-        
-        if box_h > h * 0.8:
-            box_h = int(h * 0.8)
-            box_w = int(box_h * card_ratio)
-            
-        box_x = (w - box_w) // 2
-        box_y = (h - box_h) // 2
-        
-        # Sadece yeşil kutunun içini kes
-        roi = frame[box_y:box_y+box_h, box_x:box_x+box_w]
-
-        # EasyOCR ile sadece kesilen bölgeyi oku
+        # EasyOCR İşlemi
         results = reader.readtext(roi, detail=0)
+        full_ocr_text = " ".join(results)
         
-        # Kullanıcıya neyi okuduğumuzu göstermek için kesilen bölgeyi Base64'e çevir
+        if not full_ocr_text.strip():
+            emit('result', {'error': 'Kimlik tespit edilemedi, lütfen daha net gösterin.'})
+            return
+
+        # LLM Çözümlemesi
+        kimlik_bilgileri = extract_identity_info(full_ocr_text)
+        
         _, buffer = cv2.imencode('.jpg', roi)
         roi_b64 = base64.b64encode(buffer).decode('utf-8')
         
         timestamp = datetime.now().strftime('%H:%M:%S')
-        full_text = " ".join(results) if len(results) > 0 else "YAZI BULUNAMADI"
-        
-        print(f"[{timestamp}] Manuel Tarama Yapıldı. Bulunan: {full_text}")
-        
-        return jsonify({
+
+        # raw_texts verisini arayüze iletiyoruz
+        emit('result', {
             'success': True,
-            'raw_texts': results,
-            'full_text': full_text,
+            'raw_texts': results, # OCR'ın gördüğü ham metin dizisi
+            'kimlik_bilgileri': kimlik_bilgileri,
             'timestamp': timestamp,
-            'cropped_image': roi_b64  # Kesilen fotoğrafı da gönderiyoruz
+            'cropped_image': roi_b64
         })
         
     except Exception as e:
-        print(f"Hata: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f"Sunucu Hatası: {e}")
+        emit('result', {'error': str(e)})
 
 if __name__ == '__main__':
-    print("="*50)
-    print("SUNUCU HAZIR: Tarayıcıdan http://127.0.0.1:8000 adresine gidin.")
-    print("="*50)
-    app.run(host='127.0.0.1', port=8000, debug=False, threaded=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
