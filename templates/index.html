@@ -3,196 +3,463 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Manuel Kimlik Tanıma (OCR)</title>
+    <title>Kimlik & Biniş Kartı Tespit Arayüzü</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
-        .container { max-width: 1200px; width: 100%; display: grid; grid-template-columns: 1.5fr 1fr; gap: 24px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+        body { background: #101a35; color: #e2e2e2; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 20px; }
+        .container { max-width: 1200px; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 2vh; }
         @media (max-width: 968px) { .container { grid-template-columns: 1fr; } }
         
-        .camera-section { background: #1e293b; border-radius: 20px; padding: 20px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 15px; }
-        .camera-wrapper { position: relative; background: #000; border-radius: 12px; overflow: hidden; width: 100%; }
+        .camera-section { background: rgba(226, 226, 226, 0.05); border-radius: 12px; padding: 20px; border: 1px solid #76777c; display: flex; flex-direction: column; gap: 15px; position: relative; box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
+
+        /* TAB MENÜSÜ */
+        .tab-container { display: flex; gap: 10px; margin-bottom: 5px; }
+        .tab-btn { flex: 1; padding: 12px; background: rgba(16, 26, 53, 0.5); border: 1px solid #76777c; color: #76777c; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.3s; text-transform: uppercase; font-size: 0.9rem;}
+        .tab-btn.active { background: #8fd4ff; color: #101a35; border-color: #8fd4ff; }
+        .tab-btn:hover:not(.active) { background: rgba(143, 212, 255, 0.1); color: #d9fbff;}
+
+        /* ÖN / ARKA YÜZ GEÇİŞ ANAHTARI (Sadece ID için) */
+        .toggle-container { display: flex; align-items: center; justify-content: center; gap: 15px; background: rgba(16, 26, 53, 0.5); padding: 12px; border-radius: 8px; border: 1px solid #76777c;}
+        .toggle-label { font-size: 0.9rem; font-weight: 600; color: #76777c; transition: color 0.3s; text-transform: uppercase;}
+        .toggle-label.active { color: #8fd4ff; } 
+        
+        .switch { position: relative; display: inline-block; width: 56px; height: 30px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #76777c; transition: .4s; border-radius: 30px; border: 1px solid #101a35;}
+        .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 3px; bottom: 3px; background-color: #e2e2e2; transition: .4s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.4);}
+        input:checked + .slider { background-color: #8fd4ff; border-color: #8fd4ff; }
+        input:checked + .slider:before { transform: translateX(26px); background-color: #101a35;}
+
+        .camera-wrapper { position: relative; background: #000; border-radius: 8px; overflow: hidden; width: 100%; aspect-ratio: 85.6 / 54; border: 1px solid #76777c; }
         #videoFeed { width: 100%; height: 100%; object-fit: cover; display: block; }
         
-        .scanner-guide {
+        .instruction-overlay {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            aspect-ratio: 856 / 540; width: 80%; max-height: 80%; 
-            border: 2px solid rgba(16, 185, 129, 0.5); pointer-events: none;
-            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65);
-            transition: border-color 0.3s;
+            width: auto; text-align: center; z-index: 20; color: #d9fbff; font-size: 1.1rem; font-weight: 700; letter-spacing: 1px;
+            text-transform: uppercase; pointer-events: none; display: none; background: rgba(16, 26, 53, 0.7); padding: 10px 20px; border-radius: 30px; backdrop-filter: blur(4px); border: 1px solid rgba(143, 212, 255, 0.3); box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         }
-        .scanner-guide.success { border-color: #10b981; background: rgba(16, 185, 129, 0.1); }
-        .scanner-guide::before, .scanner-guide::after, .scanner-guide .corners::before, .scanner-guide .corners::after {
-            content: ''; position: absolute; width: 30px; height: 30px; border-color: #10b981; border-style: solid;
+
+        .flip-animation-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(16, 26, 53, 0.85); display: none; justify-content: center; align-items: center; z-index: 30; perspective: 1000px;
         }
-        .scanner-guide::before { top: -2px; left: -2px; border-width: 4px 0 0 4px; }
-        .scanner-guide::after { top: -2px; right: -2px; border-width: 4px 4px 0 0; }
-        .scanner-guide .corners::before { bottom: -2px; left: -2px; border-width: 0 0 4px 4px; }
-        .scanner-guide .corners::after { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; }
+        .card-3d-wrapper {
+            width: 220px; height: 140px; position: relative; transition: transform 1s cubic-bezier(0.4, 0.2, 0.2, 1); transform-style: preserve-3d;
+        }
+        .card-3d-wrapper.do-flip { transform: rotateY(180deg); }
+        .card-front, .card-back {
+            position: absolute; width: 100%; height: 100%; backface-visibility: hidden; background: #d9fbff; border-radius: 12px; border: 2px solid #8fd4ff; box-shadow: 0 10px 25px rgba(0,0,0,0.6); display: flex; flex-direction: column; padding: 15px; color: #101a35;
+        }
+        .card-back { transform: rotateY(180deg); background: #e2e2e2; }
+        .card-title { font-weight: 900; font-size: 1rem; text-align: right; margin-bottom: auto; letter-spacing: 1px; }
+        .card-photo-placeholder {
+            width: 45px; height: 55px; border: 2px solid #76777c; align-self: flex-start; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; overflow: hidden; border-radius: 4px; padding-top: 5px; background: rgba(118,119,124,0.1);
+        }
+        .silhouette-head { width: 22px; height: 22px; background: #76777c; border-radius: 50%; margin-bottom: 2px; }
+        .silhouette-body { width: 40px; height: 22px; background: #76777c; border-radius: 12px 12px 0 0; }
+        .card-mrz { margin-top: auto; font-family: monospace; font-size: 1.1rem; color: #76777c; letter-spacing: 2px;}
 
-        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        button { padding: 14px; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: 0.2s; }
-        .btn-start { background: #10b981; color: white; grid-column: span 2; }
-        .btn-start:hover { background: #059669; }
-        .btn-stop { background: transparent; color: #ef4444; border: 1px solid #ef4444; }
-        .btn-capture { background: #3b82f6; color: white; }
-        .btn-capture:hover:not(:disabled) { background: #2563eb; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .scanner-guide {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 96%; height: 96%; border: 1px solid rgba(143, 212, 255, 0.4); pointer-events: none; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); transition: border-color 0.3s; z-index: 5;
+        }
+        .scan-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(16, 26, 53, 0.4); display: none; z-index: 10; }
+        .loading-spinner { position: absolute; top: 50%; left: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 3px solid rgba(143, 212, 255, 0.2); border-top-color: #8fd4ff; border-radius: 50%; animation: spinAnim 1s linear infinite; }
+        @keyframes spinAnim { 100% { transform: rotate(360deg); } }
 
-        .info-section { display: flex; flex-direction: column; gap: 20px; }
-        .result-card { background: #1e293b; border-radius: 20px; padding: 24px; border: 1px solid #334155; }
-        .result-title { color: #94a3b8; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 15px; }
+        /* BUTONLAR */
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { padding: 12px; border: none; border-radius: 6px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: background 0.2s, opacity 0.2s; color: #101a35; text-transform: uppercase; letter-spacing: 0.5px;}
+        .btn-start { background: #8fd4ff; grid-column: span 2; } 
+        .btn-start:hover { background: #d9fbff; }
+        .btn-stop { background: transparent; color: #e2e2e2; border: 1px solid #76777c; }
+        .btn-stop:hover:not(:disabled) { background: rgba(118, 119, 124, 0.2); color: #fff;}
+        .btn-capture { background: #d9fbff; } 
+        .btn-capture:hover:not(:disabled) { background: #8fd4ff; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* BİLGİ PANELİ */
+        .info-section { display: flex; flex-direction: column; gap: 15px; }
+        .result-card { background: rgba(226, 226, 226, 0.05); border-radius: 12px; padding: 20px; border: 1px solid #76777c; box-shadow: 0 8px 16px rgba(0,0,0,0.3);}
         
-        /* Kesilen Resmi Gösterme Alanı */
-        .cropped-preview {
-            width: 100%; border-radius: 8px; margin-bottom: 15px; border: 1px solid #334155;
-            display: none; /* İlk başta gizli */
-        }
+        .result-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #76777c; }
+        .result-title-text { color: #8fd4ff; font-size: 1rem; text-transform: uppercase; font-weight: 600; }
+        
+        .action-buttons { display: flex; gap: 8px; }
+        .btn-action { padding: 6px 12px; font-size: 0.75rem; border-radius: 4px; background: transparent; color: #e2e2e2; text-transform: uppercase; font-weight: 600; border: 1px solid #76777c;}
+        .btn-action:hover { background: rgba(118, 119, 124, 0.3); }
+        .btn-danger { color: #f87171; border-color: #ef4444; }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+        .btn-primary { background: #8fd4ff; color: #101a35; border-color: #8fd4ff; }
+        .btn-primary:hover { background: #d9fbff; }
+        .btn-success { background: #d9fbff; color: #101a35; border-color: #d9fbff; }
 
-        .raw-text-box {
-            background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 15px;
-            min-height: 150px; font-family: monospace; font-size: 1.1rem; color: #10b981;
-            display: flex; flex-direction: column; gap: 5px;
-        }
-        .empty-text { color: #64748b; font-style: italic; text-align: center; margin-top: 50px; font-family: sans-serif; }
+        /* VERİ KUTULARI */
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .data-box.full-width { grid-column: span 2; }
+        .data-box { background: rgba(16, 26, 53, 0.5); border: 1px solid #76777c; border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+        .data-label { color: #8fd4ff; font-size: 0.7rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;}
+        .data-value { color: #e2e2e2; font-size: 1rem; font-weight: 600; word-break: break-word; overflow-wrap: break-word; outline: none; transition: all 0.2s; border: 1px solid transparent; border-radius: 4px; padding: 2px 4px; margin-left: -4px;}
+        
+        .data-value.is-editing { background: rgba(143, 212, 255, 0.1); border-color: #8fd4ff; color: #d9fbff; text-transform: uppercase; }
+        .empty-text { color: #76777c; font-style: italic; text-align: center; margin: 30px 0; font-size: 0.9rem;}
     </style>
 </head>
 <body>
 
     <div class="container">
         <div class="camera-section">
-            <h2 style="font-size: 1.2rem;">📷 Manuel Belge Tarama</h2>
-            <div class="camera-wrapper">
-                <video id="videoFeed" autoplay playsinline></video>
-                <div class="scanner-guide" id="guideBox"><div class="corners"></div></div>
+            
+            <!-- SEKMELER (TABS) -->
+            <div class="tab-container">
+                <button class="tab-btn active" data-type="id_card">🪪 ID CARD</button>
+                <button class="tab-btn" data-type="boarding_pass">🎫 BOARDING PASS</button>
             </div>
+            
+            <div class="toggle-container" id="frontBackToggle">
+                <span id="lblFront" class="toggle-label active">Ön Yüz</span>
+                <label class="switch">
+                    <input type="checkbox" id="faceToggle">
+                    <span class="slider"></span>
+                </label>
+                <span id="lblBack" class="toggle-label">Arka Yüz</span>
+            </div>
+
+            <div class="camera-wrapper">
+                <div id="instructionOverlay" class="instruction-overlay">ÖN YÜZÜ TARATINIZ</div>
+                
+                <div id="flipAnimation" class="flip-animation-container">
+                    <div class="card-3d-wrapper" id="card3dWrapper">
+                        <div class="card-front">
+                            <div class="card-title">ID CARD</div>
+                            <div class="card-photo-placeholder">
+                                <div class="silhouette-head"></div>
+                                <div class="silhouette-body"></div>
+                            </div>
+                        </div>
+                        <div class="card-back">
+                            <div class="card-title">ID CARD</div>
+                            <div class="card-mrz">&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</div>
+                        </div>
+                    </div>
+                </div>
+
+                <video id="videoFeed" autoplay playsinline></video>
+                <div class="scanner-guide" id="guideBox"></div>
+                <div class="scan-overlay" id="scanOverlay"><div class="loading-spinner"></div></div>
+            </div>
+            
             <div class="controls">
-                <button class="btn-start" id="startBtn">▶ Kamerayı Başlat</button>
-                <button class="btn-capture" id="captureBtn" disabled>📸 Şimdi Tara</button>
-                <button class="btn-stop" id="stopBtn" disabled>⏹ Durdur</button>
+                <button class="btn-start" id="startBtn">Kamerayı Başlat</button>
+                <button class="btn-capture" id="captureBtn" disabled>Şimdi Tara</button>
+                <button class="btn-stop" id="stopBtn" disabled>Durdur</button>
             </div>
         </div>
 
         <div class="info-section">
             <div class="result-card">
-                <div class="result-title">Sistemin Gördüğü & Okuduğu Alan</div>
-                
-                <img id="croppedImage" class="cropped-preview" alt="Kesilen Alan" />
-
-                <div class="raw-text-box" id="resultBox">
-                    <div class="empty-text">Henüz tarama yapılmadı.</div>
+                <div class="result-header-row">
+                    <span class="result-title-text" id="panelTitle">Kimlik Verileri</span>
+                    <div class="action-buttons">
+                        <button id="clearBtn" class="btn-action btn-danger">Temizle</button>
+                        <button id="editBtn" class="btn-action">Düzenle</button>
+                        <button id="confirmBtn" class="btn-action btn-primary">Onayla</button>
+                    </div>
                 </div>
+                <div id="resultBox"><div class="empty-text">Henüz tarama yapılmadı.</div></div>
             </div>
         </div>
     </div>
 
     <script>
+        const socket = io();
+
         const video = document.getElementById('videoFeed');
-        const guideBox = document.getElementById('guideBox');
+        const scanOverlay = document.getElementById('scanOverlay');
+        const instructionOverlay = document.getElementById('instructionOverlay');
+        
+        const flipAnimationContainer = document.getElementById('flipAnimation');
+        const card3dWrapper = document.getElementById('card3dWrapper');
         const resultBox = document.getElementById('resultBox');
-        const croppedImage = document.getElementById('croppedImage');
+        
+        const frontBackToggle = document.getElementById('frontBackToggle');
+        const faceToggle = document.getElementById('faceToggle');
+        const lblFront = document.getElementById('lblFront');
+        const lblBack = document.getElementById('lblBack');
         
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const captureBtn = document.getElementById('captureBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const editBtn = document.getElementById('editBtn');
+        const confirmBtn = document.getElementById('confirmBtn');
+        
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const panelTitle = document.getElementById('panelTitle');
 
         let stream = null;
         let isRunning = false;
+        let scanState = 'FRONT'; 
+        let selectedDocType = 'id_card';
+        let currentData = {}; 
+        let isEditing = false;
+
+        // TAB (SEKME) DEĞİŞİM MANTIĞI
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                tabBtns.forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                selectedDocType = e.target.getAttribute('data-type');
+                
+                // Verileri sıfırla
+                clearData();
+
+                if(selectedDocType === 'boarding_pass') {
+                    frontBackToggle.style.display = 'none'; // Biniş kartı tek yönlüdür
+                    panelTitle.textContent = "Biniş Kartı Verileri";
+                    if(isRunning) instructionOverlay.textContent = "BİNİŞ KARTINI TARATINIZ";
+                } else {
+                    frontBackToggle.style.display = 'flex';
+                    panelTitle.textContent = "Kimlik Verileri";
+                    scanState = 'FRONT';
+                    faceToggle.checked = false;
+                    lblFront.classList.add('active');
+                    lblBack.classList.remove('active');
+                    if(isRunning) instructionOverlay.textContent = "ÖN YÜZÜ TARATINIZ";
+                }
+            });
+        });
+
+        function playFlipAnimation(targetIsBack) {
+            if(selectedDocType !== 'id_card') return; // Biniş kartında animasyon yok
+            flipAnimationContainer.style.display = 'flex';
+            if(targetIsBack) {
+                card3dWrapper.classList.remove('do-flip');
+                setTimeout(() => { card3dWrapper.classList.add('do-flip'); }, 50);
+            } else {
+                card3dWrapper.classList.add('do-flip');
+                setTimeout(() => { card3dWrapper.classList.remove('do-flip'); }, 50);
+            }
+            setTimeout(() => { flipAnimationContainer.style.display = 'none'; }, 1200);
+        }
+
+        faceToggle.addEventListener('change', (e) => {
+            let isGoingToBack = e.target.checked;
+            if(isGoingToBack) {
+                scanState = 'BACK';
+                lblFront.classList.remove('active');
+                lblBack.classList.add('active');
+                instructionOverlay.textContent = "ARKA YÜZÜ TARATINIZ";
+                playFlipAnimation(true);
+            } else {
+                scanState = 'FRONT';
+                lblBack.classList.remove('active');
+                lblFront.classList.add('active');
+                instructionOverlay.textContent = "ÖN YÜZÜ TARATINIZ";
+                playFlipAnimation(false);
+            }
+        });
 
         async function startCamera() {
             try {
-                const constraints = { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }};
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
-                
-                // Kameranın oranını ayarla ki arka plan (python) kesimi ile ekrandaki kutu eşleşsin
-                video.onloadedmetadata = () => {
-                    const wrapper = document.querySelector('.camera-wrapper');
-                    wrapper.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
-                };
-                
-                isRunning = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                captureBtn.disabled = false;
-
-                // OTOMATİK TARAMA DÖNGÜSÜ TAMAMEN SİLİNDİ
-
-            } catch (err) {
-                console.error(err);
-                alert('Kameraya erişilemedi!');
-            }
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 } }});
+            } catch (err) { alert('Kamera açılamadı!'); return; }
+            video.srcObject = stream;
+            isRunning = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            captureBtn.disabled = false;
+            
+            instructionOverlay.textContent = selectedDocType === 'id_card' ? 
+                (scanState === 'FRONT' ? "ÖN YÜZÜ TARATINIZ" : "ARKA YÜZÜ TARATINIZ") : "BİNİŞ KARTINI TARATINIZ";
+            instructionOverlay.style.display = 'block';
         }
 
         function stopCamera() {
             if (stream) stream.getTracks().forEach(track => track.stop());
             video.srcObject = null;
             isRunning = false;
-            
             startBtn.disabled = false;
             stopBtn.disabled = true;
             captureBtn.disabled = true;
-            guideBox.classList.remove('success');
-            croppedImage.style.display = 'none';
-            resultBox.innerHTML = '<div class="empty-text">Kamera kapalı.</div>';
+            scanOverlay.style.display = 'none';
+            instructionOverlay.style.display = 'none';
         }
 
-        // SADECE BUTONA BASILINCA ÇALIŞACAK FONKSİYON
-        async function captureAndDetect() {
+        function captureAndDetect() {
             if (!isRunning) return;
-            
-            // Butonu yükleniyor moduna al ve tıklanmayı engelle
-            const originalText = captureBtn.innerHTML;
-            captureBtn.innerHTML = "⏳ İşleniyor...";
+            if(isEditing) toggleEditMode(); 
+            video.pause();
+            scanOverlay.style.display = 'block';
             captureBtn.disabled = true;
 
-            try {
-                const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                const imageData = canvas.toDataURL('image/jpeg', 0.9);
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            
+            // Backend'e doküman tipini (ID veya Boarding Pass) gönderiyoruz
+            socket.emit('process_frame', { 
+                image: canvas.toDataURL('image/jpeg', 0.9),
+                doc_type: selectedDocType
+            });
+        }
 
-                // YENİ HALİ (Ngrok uyumlu):
-                const response = await fetch('/detect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: imageData })
-                });
+        socket.on('result', (result) => {
+            scanOverlay.style.display = 'none';
+            captureBtn.disabled = false;
+            if (isRunning) video.play();
 
-                const result = await response.json();
+            if (result.error) {
+                alert("Okuma hatası: " + result.error);
+                return;
+            }
 
-                if (result.success) {
-                    guideBox.classList.add('success');
-                    
-                    // Python'un kestiği fotoğrafı ekranda göster
-                    croppedImage.src = `data:image/jpeg;base64,${result.cropped_image}`;
-                    croppedImage.style.display = 'block';
+            const data = result.extracted_data;
 
-                    // Metinleri yazdır
-                    resultBox.innerHTML = '';
-                    if (result.raw_texts && result.raw_texts.length > 0) {
-                        result.raw_texts.forEach((text) => {
-                            const line = document.createElement('div');
-                            line.textContent = `> ${text}`;
-                            resultBox.appendChild(line);
-                        });
-                    } else {
-                        resultBox.innerHTML = '<div class="empty-text" style="color:#ef4444;">Yazı tespit edilemedi, lütfen tekrar deneyin.</div>';
+            if (selectedDocType === 'id_card') {
+                if (scanState === 'FRONT') {
+                    if (data.tc_kimlik) currentData.tc_kimlik = data.tc_kimlik;
+                    if (data.ad) currentData.ad = data.ad;
+                    if (data.soyad) currentData.soyad = data.soyad;
+                    if (data.dogum_tarihi) currentData.dogum_tarihi = data.dogum_tarihi;
+                    if (data.cinsiyet) currentData.cinsiyet = data.cinsiyet;
+                    if (data.seri_no) currentData.seri_no = data.seri_no;
+                    if (data.son_gecerlilik) currentData.son_gecerlilik = data.son_gecerlilik;
+                } else {
+                    if(data.mrz_data) {
+                        if (!currentData.tc_kimlik && data.mrz_data.tc_kimlik) currentData.tc_kimlik = data.mrz_data.tc_kimlik;
+                        if (!currentData.ad && data.mrz_data.ad) currentData.ad = data.mrz_data.ad;
+                        if (!currentData.soyad && data.mrz_data.soyad) currentData.soyad = data.mrz_data.soyad;
                     }
-                    
-                    // Çerçeveyi yarım saniye sonra eski haline getir
-                    setTimeout(() => guideBox.classList.remove('success'), 500);
+                    if (data.anne_adi) currentData.anne_adi = data.anne_adi;
+                    if (data.baba_adi) currentData.baba_adi = data.baba_adi;
                 }
-            } catch (err) {
-                console.error('Bağlantı Hatası:', err);
-                alert("Sunucuya bağlanılamadı.");
-            } finally {
-                // İşlem bitince butonu eski haline getir
-                captureBtn.innerHTML = "📸 Şimdi Tara";
-                captureBtn.disabled = false;
+
+                let isMissingData = false;
+                if (scanState === 'FRONT') {
+                    const reqFront = ['tc_kimlik', 'ad', 'soyad', 'dogum_tarihi', 'cinsiyet', 'seri_no', 'son_gecerlilik'];
+                    for (let key of reqFront) { if (!currentData[key] || currentData[key] === '-') isMissingData = true; }
+                } else if (scanState === 'BACK') {
+                    const reqBack = ['anne_adi', 'baba_adi'];
+                    for (let key of reqBack) { if (!currentData[key] || currentData[key] === '-') isMissingData = true; }
+                }
+
+                renderData(currentData);
+
+                if (isMissingData) {
+                    alert("Eksik bilgi tespit edildi! Lütfen kimliği bir daha tarayın.");
+                    return; 
+                }
+
+                if (scanState === 'FRONT' && !isMissingData) {
+                    setTimeout(() => {
+                        faceToggle.checked = true;
+                        faceToggle.dispatchEvent(new Event('change'));
+                    }, 1000); 
+                }
+
+            } else if (selectedDocType === 'boarding_pass') {
+                // Boarding Pass veri birleştirme
+                for(let k in data) {
+                    if(data[k]) currentData[k] = data[k];
+                }
+                renderData(currentData);
+            }
+        });
+
+        function renderData(data) {
+            if (Object.keys(data).length === 0) {
+                resultBox.innerHTML = '<div class="empty-text">Henüz tarama yapılmadı.</div>';
+                return;
+            }
+
+            let html = `<div class="data-grid">`;
+            
+            if(selectedDocType === 'id_card') {
+                html += `<div class="data-box full-width"><span class="data-label">TC Kimlik No</span><span class="data-value" data-key="tc_kimlik">${data.tc_kimlik || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Ad</span><span class="data-value" data-key="ad">${data.ad || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Soyad</span><span class="data-value" data-key="soyad">${data.soyad || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Doğum Tarihi</span><span class="data-value" data-key="dogum_tarihi">${data.dogum_tarihi || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Cinsiyet</span><span class="data-value" data-key="cinsiyet">${data.cinsiyet || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Seri No</span><span class="data-value" data-key="seri_no">${data.seri_no || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Son Geçerlilik</span><span class="data-value" data-key="son_gecerlilik">${data.son_gecerlilik || '-'}</span></div>`;
+                
+                if(data.anne_adi || data.baba_adi || scanState === 'BACK') {
+                    html += `<div class="data-box"><span class="data-label">Anne Adı</span><span class="data-value" style="color:#8fd4ff;" data-key="anne_adi">${data.anne_adi || '-'}</span></div>`;
+                    html += `<div class="data-box"><span class="data-label">Baba Adı</span><span class="data-value" style="color:#8fd4ff;" data-key="baba_adi">${data.baba_adi || '-'}</span></div>`;
+                }
+            } else if (selectedDocType === 'boarding_pass') {
+                html += `<div class="data-box full-width"><span class="data-label">Yolcu Adı</span><span class="data-value" data-key="yolcu_adi">${data.yolcu_adi || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Uçuş No</span><span class="data-value" data-key="ucus_no">${data.ucus_no || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Tarih</span><span class="data-value" data-key="tarih">${data.tarih || '-'}</span></div>`;
+                html += `<div class="data-box full-width"><span class="data-label">Güzergah</span><span class="data-value" data-key="guzergah">${data.guzergah || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Koltuk</span><span class="data-value" data-key="koltuk">${data.koltuk || '-'}</span></div>`;
+                html += `<div class="data-box"><span class="data-label">Kapı (Gate)</span><span class="data-value" data-key="kapi">${data.kapi || '-'}</span></div>`;
+            }
+            
+            html += `</div>`;
+            resultBox.innerHTML = html;
+        }
+
+        function clearData() {
+            currentData = {};
+            if (isEditing) {
+                isEditing = false;
+                editBtn.textContent = 'Düzenle';
+                editBtn.classList.remove('btn-success');
+                editBtn.classList.add('btn-action');
+            }
+            if(selectedDocType === 'id_card') {
+                faceToggle.checked = false;
+                faceToggle.dispatchEvent(new Event('change'));
+            }
+            renderData(currentData);
+        }
+
+        clearBtn.addEventListener('click', () => {
+            if (Object.keys(currentData).length === 0) return;
+            if (confirm("Verileri temizlemek istediğinize emin misiniz?")) clearData();
+        });
+
+        function toggleEditMode() {
+            const values = document.querySelectorAll('.data-value');
+            if (!isEditing) {
+                isEditing = true;
+                editBtn.textContent = 'Kaydet';
+                editBtn.classList.remove('btn-action');
+                editBtn.classList.add('btn-action', 'btn-success');
+                values.forEach(el => { el.contentEditable = "true"; el.classList.add('is-editing'); });
+                if(values.length > 0) values[0].focus();
+            } else {
+                isEditing = false;
+                editBtn.textContent = 'Düzenle';
+                editBtn.classList.remove('btn-success');
+                editBtn.classList.add('btn-action');
+                values.forEach(el => {
+                    el.contentEditable = "false";
+                    el.classList.remove('is-editing');
+                    const key = el.getAttribute('data-key');
+                    if (key) {
+                        let val = el.innerText.trim();
+                        currentData[key] = (val === '-' || val === '') ? "" : val.toLocaleUpperCase('tr-TR');
+                    }
+                });
+                renderData(currentData);
             }
         }
+
+        editBtn.addEventListener('click', () => {
+            if (Object.keys(currentData).length === 0) { alert("Düzenlenecek bir veri yok."); return; }
+            toggleEditMode();
+        });
+
+        confirmBtn.addEventListener('click', () => {
+            if (Object.keys(currentData).length === 0) { alert("Onaylanacak veri bulunamadı."); return; }
+            if(isEditing) toggleEditMode();
+            console.log("ONAYLANAN VERİLER:", currentData);
+            alert("İşlem Başarılı! Veriler kaydedildi.");
+        });
 
         startBtn.addEventListener('click', startCamera);
         stopBtn.addEventListener('click', stopCamera);
